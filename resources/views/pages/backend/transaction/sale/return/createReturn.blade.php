@@ -49,8 +49,8 @@
                     </div>
                     @foreach ($barang as $el)
                     <input class="barangDataHidden" type="hidden" data-id="{{$el->sale_id}}"
-                        data-value="{{$el->id}}" data-brand="{{$el->brand_name}}" data-old="{{$el->price}}" data-qty="{{$el->qty}}"
-                        data-item="{{$el->item_name}}" value="{{$el->id}}">
+                        data-value="{{$el->sale_detail_id}}" data-brand="{{$el->brand_name}}" data-old="{{$el->price}}" data-qty="{{$el->qty}}"
+                        data-item="{{$el->item_name}}" value="{{$el->sale_detail_id}}">
                     @endforeach
                     <div class="row">
                         <div class="form-group col-md-8 col-xs-12" id="itemOldDiv">

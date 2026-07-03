@@ -129,7 +129,15 @@ class SaleReturnController extends Controller
         $barang = Sale::rightJoin('sale_details', 'sales.id', 'sale_details.sale_id')
         ->join('items', 'sale_details.item_id', 'items.id')
         ->join('brands', 'items.brand_id', 'brands.id')
-        ->select('*', 'brands.name as brand_name', 'items.name as item_name')
+        ->select(
+            'sale_details.id as sale_detail_id',
+            'sale_details.sale_id',
+            'sale_details.item_id',
+            'sale_details.price',
+            'sale_details.qty',
+            'brands.name as brand_name',
+            'items.name as item_name'
+        )
         ->get();
 
         return view('pages.backend.transaction.sale.return.createReturn', [
@@ -174,130 +182,141 @@ class SaleReturnController extends Controller
 
     public function store(Request $req)
     {
-        // Validator
-        foreach ($req->items as $d) {
-            if ($d == null) {
-                return Response::json([
-                    'status' => 'error',
-                    'data' => array("Ada data yang kosong, pilih terlebih dahulu!")
-                ]);
-            }
-        }
+        $validator = Validator::make($req->all(), [
+            'saleId' => 'required|exists:sales,id',
+            'barang' => 'required|exists:sale_details,id',
+            'type' => 'required',
+            'description' => 'required',
+        ]);
 
-        foreach ($req->type as $t) {
-            if ($t == null) {
-                return Response::json([
-                    'status' => 'error',
-                    'data' => array("Ada perlakuan barang yang kosong, pilih terlebih dahulu!")
-                ]);
-            }
-        }
-
-        if (count(array_unique($req->items)) < count($req->items)) {
-            // Array has duplicates
+        if ($validator->fails()) {
             return Response::json([
                 'status' => 'error',
-                'data' => array("Data Barang Ada Yang Sama")
+                'data' => $this->DashboardController->validator($validator->errors()->all())
             ]);
         }
 
-        foreach ($req->items as $d) {
-            // Initialization
-            $warranty = Item::with('warranty')
-                ->find($d)->warranty;
-            // Mengambil Tanggal Faktur Dikeluarkan
-            $date = Carbon::parse(Sale::find($req->item)->date);
-            // Mengambil Jarak Garansi
+        $saleDetail = SaleDetail::with('Sale', 'Item.warranty')
+            ->where('id', $req->barang)
+            ->where('sale_id', $req->saleId)
+            ->first();
+
+        if (!$saleDetail) {
+            return Response::json([
+                'status' => 'error',
+                'data' => ['Barang tidak sesuai dengan faktur penjualan yang dipilih.']
+            ]);
+        }
+
+        $warranty = $saleDetail->Item->warranty;
+        if ($warranty) {
             $dayWarranty = $this->getDayWarranty($warranty->name, $warranty->periode);
-            // Mengambil Tanggal Garansi
-            $warranty = $date->addDays($dayWarranty);
-            // Check Garansi
-            if (Carbon::now()->diffAsCarbonInterval($warranty)->d > $dayWarranty) {
+            $warrantyExpiredAt = Carbon::parse($saleDetail->Sale->date)->addDays($dayWarranty);
+
+            if (Carbon::now()->greaterThan($warrantyExpiredAt)) {
                 return Response::json([
                     'status' => 'error',
-                    'data' => array(
-                        "Barang " . Item::find($d)->name . " tidak bisa di return, karena melewati masa garansi"
-                    )
+                    'data' => [
+                        "Barang " . $saleDetail->Item->name . " tidak bisa di return, karena melewati masa garansi"
+                    ]
                 ]);
             }
         }
 
-        $data = array();
-        // Check Return
-        foreach ($req->type as $index => $t) {
-            switch ($t) {
-                    // Service
-                case 1:
-                    // return Response::json([
-                    //     'status' => 'loss',
-                    //     'data' => "Barang akan diservice dan barang yang digantikan akan dijadikan barang loss sales!"
-                    // ]);
-                    break;
-                case 2:
-                    // Ganti Baru
-                    // Sedangkan ssd rusak iku maeng akan di return ng supplier. Dadi mutasi barang ssd dengan keterangan barang direturn ng supplier.
-                    // return Response::json([
-                    //     'status' => 'new',
-                    //     'data' => "Barang akan diganti baru dan barang lama akan di return ke supplier!"
-                    // ]);
-                    break;
-                case 3:
-                    // Tukar Tambah
-                    break;
-                case 4:
-                    // Diganti Uang
-                    // return Response::json([
-                    //     'status' => 'money',
-                    //     'data' => "Barang akan direturn menggunakan uang!"
-                    // ]);
-                    break;
-                case 5:
-                    // Diganti Barang Lain
-                    // return Response::json([
-                    //     'status' => 'att',
-                    //     'data' => "Barang akan diganti sesuai keinginan dan barang lama akan dibeli toko dan masuk ke dalam stok!"
-                    // ]);
-                    break;
-            }
+        $itemsDetail = $req->itemsDetail ?? [];
+        $returnType = $this->normalizeReturnType($req->type);
+
+        if ($req->type != 1 && count($itemsDetail) == 0) {
+            return Response::json([
+                'status' => 'error',
+                'data' => ['Tambahkan minimal satu data detail barang pengganti/loss.']
+            ]);
         }
-        // array_push($data, (object)[
-        //     'id_item' => $i->id,
-        //     'name_item' => $i->name,
-        //     'qty' => $s->qty,
-        //     'price' => $s->total,
-        //     'sales_id' => $s->sales_id,
-        //     'buyer_id' => $s->buyer_id,
-        //     'sp_buyer' => $s->sharing_profit_sales,
-        //     'sp_sales' => $s->sharing_profit_sales,
-        //     'dsc' => $s->description,
-        //     'sale' => $req->sale
-        // ]);
 
-        // $id = DB::table('sale_return')->max('id') + 1;
-        // SaleReturn::create([
-        //     'id' => $id,
-        //     'code' => $this->DashboardController->createCode('RTNP', 'sale_return'),
-        //     'sale_id' => $req->item,
-        //     'branch_id' => Employee::where('user_id', Auth::user()->id)->first()->branch_id,
-        //     'desc' => $req->description,
-        //     'created_at' => date('Y-m-d h:i:s'),
-        //     'created_by' => Auth::user()->name,
-        // ]);
+        $itemsDetail = array_filter($itemsDetail, function ($item) {
+            return $item !== null && $item !== '' && $item !== '-';
+        });
 
-        // foreach ($req->data_item as $index => $d) {
-        //     SaleReturnDetail::create([
-        //         'sale_return_id' => $id,
-        //         'item_id' => $d,
-        //         'type' => $req->type[$index],
-        //         'created_at' => date('Y-m-d h:i:s'),
-        //         'created_by' => Auth::user()->name,
-        //     ]);
-        // }
+        if ($req->type != 1 && count($itemsDetail) == 0) {
+            return Response::json([
+                'status' => 'error',
+                'data' => ['Ada data barang detail yang kosong, pilih terlebih dahulu!']
+            ]);
+        }
 
-        return Response::json([
-            'status' => 'success',
-            'result' => $data
-        ]);
+        DB::beginTransaction();
+        try {
+            $id = DB::table('sale_return')->max('id') + 1;
+            $code = $this->DashboardController->createCode('RTP', 'sale_return');
+            $now = date('Y-m-d H:i:s');
+
+            SaleReturn::create([
+                'id' => $id,
+                'code' => $code,
+                'sale_id' => $req->saleId,
+                'item_id' => $saleDetail->item_id,
+                'date' => date('Y-m-d'),
+                'type' => date('Y-m-d'),
+                'description' => $req->description,
+                'account' => '-',
+                'item_price_old' => $this->parseNumber($req->item_price_old ?? $saleDetail->price),
+                'item_price' => $this->parseNumber($req->item_price ?? 0),
+                'total_price' => $this->parseNumber($req->total ?? 0),
+                'user_id' => Auth::user()->id,
+                'created_at' => $now,
+                'created_by' => Auth::user()->name,
+            ]);
+
+            SaleReturnDetail::create([
+                'sale_return_id' => $id,
+                'item_id' => $saleDetail->item_id,
+                'sales_id' => $saleDetail->sales_id,
+                'buyer_id' => $saleDetail->buyer_id ?? 0,
+                'qty' => $saleDetail->qty,
+                'type' => $returnType,
+                'description' => $req->description,
+                'price' => $saleDetail->price,
+                'total' => $saleDetail->total,
+                'sharing_loss_store' => 0,
+                'sharing_loss_sales' => 0,
+                'sharing_loss_buyer' => 0,
+                'created_at' => $now,
+                'created_by' => Auth::user()->name,
+            ]);
+
+            foreach ($itemsDetail as $index => $itemId) {
+                SaleReturnDetail::create([
+                    'sale_return_id' => $id,
+                    'item_id' => $itemId,
+                    'sales_id' => $saleDetail->sales_id,
+                    'buyer_id' => $saleDetail->buyer_id ?? 0,
+                    'qty' => $req->qtyDetail[$index] ?? 0,
+                    'type' => $returnType,
+                    'description' => $req->descriptionDetail[$index] ?? '',
+                    'price' => $this->parseNumber($req->priceDetail[$index] ?? 0),
+                    'total' => $this->parseNumber($req->totalPriceDetail[$index] ?? 0),
+                    'sharing_loss_store' => 0,
+                    'sharing_loss_sales' => 0,
+                    'sharing_loss_buyer' => 0,
+                    'created_at' => $now,
+                    'created_by' => Auth::user()->name,
+                ]);
+            }
+
+            DB::commit();
+
+            return Response::json([
+                'status' => 'success',
+                'data' => 'Data return penjualan berhasil disimpan'
+            ]);
+        } catch (\Throwable $th) {
+            DB::rollback();
+
+            return Response::json([
+                'status' => 'error',
+                'data' => [$th->getMessage()]
+            ]);
+        }
     }
 
     public function show()
@@ -419,11 +438,34 @@ class SaleReturnController extends Controller
     function getDayWarranty($type, $periode)
     {
         if ($type == 'Minggu') {
-            $day = 7;
+            $day = 7 * $periode;
         } elseif ($type == 'Bulan') {
-            $day = 30;
+            $day = 30 * $periode;
+        } else {
+            $day = $periode;
         }
-        return $day + $periode;
+        return $day;
+    }
+
+    private function parseNumber($value)
+    {
+        return (float) str_replace(',', '', $value ?? 0);
+    }
+
+    private function normalizeReturnType($type)
+    {
+        switch ((int) $type) {
+            case 1:
+                return 4; // Ganti uang
+            case 2:
+                return 2; // Ganti barang serupa
+            case 3:
+                return 3; // Tukar tambah
+            case 4:
+                return 1; // Servis
+            default:
+                return $type;
+        }
     }
 
     public function getType($type)
